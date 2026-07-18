@@ -366,13 +366,279 @@ async function withToken(c, fn) {
 // ─── Config + health + manifest ──────────────────────────────────────────────
 app.get('/', c => {
   const base = getBaseUrl(c);
-  return c.html(
-    `<html><body style="font-family:sans-serif;background:#111;color:#eee;padding:20px">
-      <h1>SoundCloud + Deezer (SNIP-only) Addon</h1>
-      <p>Use <code>POST ${base}/generate</code> to get your Eclipse addon URL.</p>
-      <p>Manifest: <code>${base}/u/&lt;token&gt;/manifest.json</code></p>
-    </body></html>`
-  );
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SoundCloud + Deezer for Eclipse</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0f0f0f;
+    color: #e8e8e8;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 40px 16px;
+  }
+  .wrap {
+    max-width: 560px;
+    width: 100%;
+  }
+  .card {
+    background: #161616;
+    border: 1px solid #232323;
+    border-radius: 18px;
+    padding: 28px 24px 24px;
+    box-shadow: 0 24px 64px rgba(0,0,0,.5);
+  }
+  h1 {
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .sub {
+    font-size: 14px;
+    color: #888;
+    line-height: 1.6;
+    margin-bottom: 18px;
+  }
+  .lbl {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: #555;
+    margin-top: 16px;
+    margin-bottom: 7px;
+  }
+  input {
+    width: 100%;
+    background: #101010;
+    border: 1px solid #252525;
+    border-radius: 10px;
+    color: #e8e8e8;
+    font-size: 14px;
+    padding: 11px 12px;
+    outline: none;
+    margin-bottom: 6px;
+    transition: border-color .15s;
+  }
+  input:focus { border-color: #f50; }
+  input::placeholder { color: #444; }
+  .hint {
+    font-size: 12px;
+    color: #666;
+    line-height: 1.6;
+    margin-bottom: 10px;
+  }
+  .hint a { color: #f50; text-decoration: none; }
+  .btn {
+    display: inline-block;
+    width: 100%;
+    margin-top: 14px;
+    border-radius: 10px;
+    border: none;
+    padding: 12px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background .15s, transform .05s;
+  }
+  .btn-primary {
+    background: #f50;
+    color: #fff;
+  }
+  .btn-primary:hover { background: #d94a00; transform: translateY(-1px); }
+  .btn-primary:disabled {
+    background: #252525;
+    color: #555;
+    cursor: not-allowed;
+    transform: none;
+  }
+  .url-box {
+    display: none;
+    margin-top: 14px;
+    border-radius: 12px;
+    border: 1px solid #252525;
+    background: #101010;
+    padding: 12px 12px 10px;
+  }
+  .url-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: #555;
+    margin-bottom: 6px;
+  }
+  .url-value {
+    font-size: 12px;
+    font-family: "SF Mono","Menlo",monospace;
+    color: #f50;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+  .url-actions {
+    margin-top: 10px;
+    display: flex;
+    gap: 8px;
+  }
+  .btn-secondary {
+    flex: 1;
+    background: #1a1a1a;
+    color: #ccc;
+    border: 1px solid #2a2a2a;
+    font-size: 13px;
+  }
+  .btn-secondary:hover { background: #222; color: #fff; }
+  .status {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #666;
+    min-height: 18px;
+  }
+  .status.ok { color: #5a9e5a; }
+  .status.err { color: #c0392b; }
+  .steps {
+    margin-top: 18px;
+    border-top: 1px solid #222;
+    padding-top: 16px;
+    font-size: 13px;
+    color: #777;
+  }
+  .step { margin-bottom: 8px; }
+  .step b { color: #ddd; }
+  footer {
+    margin-top: 16px;
+    font-size: 11px;
+    color: #444;
+    text-align: center;
+  }
+  footer a { color: #555; text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>SoundCloud + Deezer for Eclipse</h1>
+    <p class="sub">
+      This addon uses SoundCloud for search and playback. When a track is a 30-second SoundCloud
+      preview (policy <code>SNIP</code>), it automatically falls back to Deezer (via ARL) to find a full stream.
+    </p>
+
+    <div class="lbl">SoundCloud Client ID <span style="font-weight:400;color:#777;text-transform:none">(optional)</span></div>
+    <input id="clientId" type="text" placeholder="Leave blank to use the shared auto-scraped client_id">
+    <div class="hint">
+      To get your own client_id, open <a href="https://soundcloud.com" target="_blank">soundcloud.com</a>,
+      press <code>F12</code> → Network tab, filter <code>api-v2</code>, and copy <code>client_id</code>.
+    </div>
+
+    <div class="lbl">SoundCloud OAuth Token <span style="font-weight:400;color:#777;text-transform:none">(optional)</span></div>
+    <input id="oauthToken" type="password" placeholder="Paste OAuth token to avoid 30-second previews on normal tracks">
+    <div class="hint">
+      Find it under Application → Local Storage → <code>soundcloud.com</code> → key <code>oauth_token</code>,
+      or in any api-v2 request header <code>Authorization: OAuth ...</code>.
+    </div>
+
+    <button class="btn btn-primary" id="genBtn">Generate addon URL</button>
+
+    <div class="url-box" id="urlBox">
+      <div class="url-label">Addon manifest URL — paste into Eclipse</div>
+      <div class="url-value" id="urlValue"></div>
+      <div class="url-actions">
+        <button class="btn btn-secondary" id="copyBtn">Copy URL</button>
+        <button class="btn btn-secondary" id="regenBtn">Generate another</button>
+      </div>
+    </div>
+
+    <div class="status" id="status"></div>
+
+    <div class="steps">
+      <div class="step"><b>Step 1:</b> Generate and copy the addon URL above.</div>
+      <div class="step"><b>Step 2:</b> In Eclipse, go to Settings → Connections → Add Connection → Addon.</div>
+      <div class="step"><b>Step 3:</b> Paste the URL and tap Install.</div>
+      <div class="step"><b>Step 4:</b> Search and play; Deezer is used only for SoundCloud 30s preview tracks.</div>
+    </div>
+  </div>
+  <footer>
+    Worker base: <a href="${base}/health" target="_blank">${base}</a>
+  </footer>
+</div>
+
+<script>
+(function() {
+  var base = ${JSON.stringify(base)};
+  var genBtn   = document.getElementById('genBtn');
+  var regenBtn = document.getElementById('regenBtn');
+  var copyBtn  = document.getElementById('copyBtn');
+  var urlBox   = document.getElementById('urlBox');
+  var urlValue = document.getElementById('urlValue');
+  var statusEl = document.getElementById('status');
+  var clientIdEl = document.getElementById('clientId');
+  var oauthEl    = document.getElementById('oauthToken');
+
+  function setStatus(msg, kind) {
+    statusEl.textContent = msg || '';
+    statusEl.className = 'status' + (kind ? ' ' + kind : '');
+  }
+
+  function setUrl(url) {
+    urlValue.textContent = url;
+    urlBox.style.display = 'block';
+  }
+
+  async function generateUrl() {
+    genBtn.disabled = true;
+    genBtn.textContent = 'Generating...';
+    setStatus('Generating addon URL...', null);
+
+    var payload = {
+      clientId: clientIdEl.value.trim() || null,
+      oauthToken: oauthEl.value.trim() || null
+    };
+
+    try {
+      var res = await fetch(base + '/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      var data = await res.json();
+      if (!res.ok || data.error) {
+        setStatus(data.error || ('Server error ' + res.status), 'err');
+      } else {
+        setUrl(data.manifestUrl);
+        setStatus('Addon URL generated. Paste into Eclipse.', 'ok');
+      }
+    } catch (e) {
+      setStatus('Error: ' + e.message, 'err');
+    } finally {
+      genBtn.disabled = false;
+      genBtn.textContent = 'Generate addon URL';
+    }
+  }
+
+  genBtn.addEventListener('click', generateUrl);
+  regenBtn.addEventListener('click', generateUrl);
+
+  copyBtn.addEventListener('click', function() {
+    var text = urlValue.textContent.trim();
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(function() {
+      setStatus('Addon URL copied to clipboard.', 'ok');
+    }).catch(function() {
+      setStatus('Could not copy to clipboard.', 'err');
+    });
+  });
+})();
+</script>
+</body>
+</html>`;
+
+  return c.html(html);
 });
 
 app.get('/health', c => c.json({
