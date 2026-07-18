@@ -393,19 +393,163 @@ async function deezerFindBestTrack(title, artist, isrc, env) {
 
   return scored[0] && scored[0].score > 0 ? scored[0].t : null;
 }
+// Deezer private GW helpers (for full-stream fallback via ARL)
+async function dzPing(arl) {
+  const res = await fetch(
+    'https://www.deezer.com/ajax/gw-light.php?method=deezer.ping&input=3&api_version=1.0&api_token=null',
+    {
+      method: 'POST',
+      headers: {
+        Cookie: 'arl=' + arl,
+        'Content-Type': 'application/json',
+        'User-Agent': UA,
+        'Accept-Language': 'en-US,en;q=0.9',
+        Origin: 'https://www.deezer.com',
+        Referer: 'https://www.deezer.com',
+      },
+      body: '{}',
+    }
+  );
+  const data = await res.json();
+  return data?.results?.SESSION ?? null;
+}
+
+async function dzGw(method, params, arl, sid, apiToken) {
+  const res = await fetch(
+    'https://www.deezer.com/ajax/gw-light.php?method=' + method +
+      '&input=3&api_version=1.0&api_token=' + encodeURIComponent(apiToken ?? 'null'),
+    {
+      method: 'POST',
+      headers: {
+        Cookie: 'arl=' + arl + '; sid=' + sid,
+        'Content-Type': 'application/json',
+        'User-Agent': UA,
+        Accept: 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        Origin: 'https://www.deezer.com',
+        Referer: 'https://www.deezer.com',
+      },
+      body: JSON.stringify(params),
+    }
+  );
+  const text = await res.text();
+  try { return JSON.parse(text); } catch { return { raw: text.slice(0, 500) }; }
+}
+
+function getBlowfishKeyString(trackId) {
+  const SECRET = 'g4el58wc0zvf9na1';
+  const md5Id = [...new TextEncoder().encode(String(trackId))].reduce(
+    (h, b) => { h.push(b.toString(16).padStart(2, '0')); return h; }, []
+  ).join('');
+  // Simple MD5 hex of trackId is not available natively — use track token approach via media.deezer.com only
+  return null; // BF key not needed here — we only return the CDN URL + let caller handle
+}
+
+const _dzSessionCache = new Map();
+function dzSessionGet(arlKey) {
+  const e = _dzSessionCache.get(arlKey);
+  if (!e) return null;
+  if (Date.now() > e.exp) { _dzSessionCache.delete(arlKey); return null; }
+  return e.val;
+}
+function dzSessionSet(arlKey, val) {
+  _dzSessionCache.set(arlKey, { val, exp: Date.now() + 7200000 });
+}
+
 async function deezerStream(deezerTrackId, env) {
-  const data = await deezerApi(env, '/track/' + deezerTrackId, {});
-  const url =
-    (data && (data.stream_url || data.url || data.preview)) || null;
-  if (!url) throw new Error('No Deezer stream URL');
-  const isFlac =
-    data &&
-    data.type &&
-    String(data.type).toLowerCase().includes('flac');
+  const arl = env.DEEZER_ARL;
+  if (!arl) {
+    // No ARL — fall back to 30s preview via public API
+    const data = await deezerApi(env, '/track/' + deezerTrackId, {});
+    const url = (data && data.preview) || null;
+    if (!url) throw new Error('No Deezer preview URL');
+    return {
+      url,
+      format: 'mp3',
+      quality: 'preview_30s',
+      source: 'deezer',
+      expiresAt: Math.floor(Date.now() / 1000) + 7200,
+    };
+  }
+
+  const arlKey = arl.slice(0, 16);
+  let session = dzSessionGet(arlKey);
+  let sid, apiToken, licenseToken, userId;
+
+  if (session) {
+    ({ sid, apiToken, licenseToken, userId } = session);
+  } else {
+    sid = await dzPing(arl);
+    const userRaw = await dzGw('deezer.getUserData', {}, arl, sid, null);
+    apiToken = userRaw?.results?.checkForm ?? null;
+    licenseToken = userRaw?.results?.USER?.OPTIONS?.license_token ?? null;
+    userId = userRaw?.results?.USER?.USER_ID ?? 0;
+    if (userId && userId !== 0) {
+      dzSessionSet(arlKey, { sid, apiToken, licenseToken, userId });
+    }
+  }
+
+  if (!userId || userId === 0) {
+    // ARL invalid — try preview fallback
+    const data = await deezerApi(env, '/track/' + deezerTrackId, {});
+    const url = (data && data.preview) || null;
+    if (!url) throw new Error('Deezer ARL invalid and no preview available');
+    return { url, format: 'mp3', quality: 'preview_30s', source: 'deezer', expiresAt: Math.floor(Date.now() / 1000) + 7200 };
+  }
+
+  const listRaw = await dzGw('song.getListData', { sng_ids: [String(deezerTrackId)] }, arl, sid, apiToken);
+  const song = listRaw?.results?.data?.[0];
+  if (!song?.TRACK_TOKEN) throw new Error('No track token from Deezer GW');
+
+  const mediaRes = await fetch('https://media.deezer.com/v1/get_url', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': UA,
+      Cookie: 'arl=' + arl + '; sid=' + sid,
+      Origin: 'https://www.deezer.com',
+      Referer: 'https://www.deezer.com',
+      Accept: 'application/json, text/plain, */*',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+    body: JSON.stringify({
+      license_token: licenseToken,
+      media: [
+        { type: 'FULL', formats: [{ cipher: 'NONE', format: 'MP3_320' }] },
+        { type: 'FULL', formats: [{ cipher: 'NONE', format: 'MP3_128' }] },
+        { type: 'FULL', formats: [{ cipher: 'NONE', format: 'FLAC' }] },
+      ],
+      track_tokens: [song.TRACK_TOKEN],
+    }),
+  });
+
+  const mediaData = await mediaRes.json();
+  let streamUrl = null;
+  let quality = '320kbps';
+  for (const item of (mediaData?.data?.[0]?.media ?? [])) {
+    const s = item?.sources?.[0]?.url;
+    if (s) {
+      streamUrl = s;
+      const fmt = item.format ?? 'MP3_320';
+      quality = fmt.includes('FLAC') ? 'lossless' : fmt.includes('320') ? '320kbps' : '128kbps';
+      break;
+    }
+  }
+
+  if (!streamUrl) {
+    // Bust session and try preview fallback
+    _dzSessionCache.delete(arlKey);
+    const data = await deezerApi(env, '/track/' + deezerTrackId, {});
+    const url = (data && data.preview) || null;
+    if (!url) throw new Error('No Deezer stream URL available');
+    return { url, format: 'mp3', quality: 'preview_30s', source: 'deezer', expiresAt: Math.floor(Date.now() / 1000) + 7200 };
+  }
+
+  const isFlac = quality === 'lossless';
   return {
-    url,
+    url: streamUrl,
     format: isFlac ? 'flac' : 'mp3',
-    quality: isFlac ? 'lossless' : 'high',
+    quality,
     source: 'deezer',
     expiresAt: Math.floor(Date.now() / 1000) + 7200,
   };
@@ -833,7 +977,9 @@ app.get('/u/:token/stream/:id', async (c) =>
                 return c.json(dzStream);
               }
             }
-          } catch {}
+          } catch (e) {
+            console.error('Deezer fallback error:', e && e.message);
+          }
         }
 
         for (const t of liveTc) {
