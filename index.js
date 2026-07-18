@@ -458,20 +458,20 @@ app.get('/', (c) => {
     <input id="clientId" type="text" placeholder="Leave blank to use the shared auto-scraped client_id">
     <div class="hint">
       To get your own client_id, open <a href="https://soundcloud.com" target="_blank">soundcloud.com</a>,
-      press <code>F12</code> → Network tab, filter <code>api-v2</code>, and copy <code>client_id</code>.
+      press <code>F12</code> â†’ Network tab, filter <code>api-v2</code>, and copy <code>client_id</code>.
     </div>
 
     <div class="lbl">SoundCloud OAuth Token <span style="font-weight:400;color:#777;text-transform:none">(optional)</span></div>
     <input id="oauthToken" type="password" placeholder="Paste OAuth token to avoid 30s previews on normal tracks">
     <div class="hint">
-      Find it under Application → Local Storage → <code>soundcloud.com</code> → key <code>oauth_token</code>,
+      Find it under Application â†’ Local Storage â†’ <code>soundcloud.com</code> â†’ key <code>oauth_token</code>,
       or in any api-v2 request header <code>Authorization: OAuth ...</code>.
     </div>
 
     <button class="btn btn-primary" id="genBtn">Generate addon URL</button>
 
     <div class="url-box" id="urlBox">
-      <div class="url-label">Addon manifest URL — paste into Eclipse</div>
+      <div class="url-label">Addon manifest URL â€” paste into Eclipse</div>
       <div class="url-value" id="urlValue"></div>
       <div class="url-actions">
         <button class="btn btn-secondary" id="copyBtn">Copy URL</button>
@@ -483,7 +483,7 @@ app.get('/', (c) => {
 
     <div class="steps">
       <div class="step"><b>Step 1:</b> Generate and copy the addon URL above.</div>
-      <div class="step"><b>Step 2:</b> In Eclipse, go to Settings → Connections → Add Connection → Addon.</div>
+      <div class="step"><b>Step 2:</b> In Eclipse, go to Settings â†’ Connections â†’ Add Connection â†’ Addon.</div>
       <div class="step"><b>Step 3:</b> Paste the URL and tap Install.</div>
       <div class="step"><b>Step 4:</b> Search and play; Deezer is used only for SoundCloud 30s preview tracks.</div>
     </div>
