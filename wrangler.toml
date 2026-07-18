@@ -1,0 +1,24 @@
+name = "soundcloud-deezer-eclipse"
+main = "index.js"
+compatibility_date = "2024-05-01"
+
+# Optional: if you want modules format instead of service worker, add:
+# [build]
+# command = "npm run build"
+
+[vars]
+# Upstash Redis (same as eclipse3)
+REDIS_URL = "https://YOUR-UPSTASH-URL"
+REDIS_TOKEN = "YOUR-UPSTASH-TOKEN"
+
+# Optional shared SoundCloud client_id (otherwise auto-scraped)
+SC_CLIENT_ID = ""
+
+# Global Deezer ARL cookie for direct API access
+DEEZER_ARL = "YOUR_DEEZER_ARL_COOKIE"
+
+[env.production]
+# Put your production-specific vars here if you want to override
+
+[observability]
+enabled = true
