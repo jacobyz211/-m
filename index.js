@@ -11,18 +11,21 @@ app.use('*', cors());
 // ─── Constants ───────────────────────────────────────────────────────────────
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+const RATE_MAX          = 60;
+const RATE_WINDOW_MS    = 60000;
+const MAX_TOKENS_PER_IP = 10;
+
 // In-memory caches (per isolate)
 const TOKEN_CACHE = new Map();   // token -> entry
 const TRACK_CACHE = new Map();   // scId  -> meta
-
-const RATE_MAX       = 60;
-const RATE_WINDOW_MS = 60000;
-const MAX_TOKENS_PER_IP = 10;
+const IP_BUCKETS  = new Map();   // ip    -> { count, resetAt }
 
 let SHARED_CLIENT_ID = null;
 let _scFetchPromise  = null;
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+const _inflight = new Map();     // dedupe streams
+
+// ─── Small helpers ───────────────────────────────────────────────────────────
 function cleanText(s) {
   return String(s || '').replace(/\s+/g, ' ').trim();
 }
@@ -72,6 +75,13 @@ function effectiveCid(entry, env) {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function dedupeCall(key, fn) {
+  if (_inflight.has(key)) return _inflight.get(key);
+  const p = Promise.resolve().then(fn).finally(() => _inflight.delete(key));
+  _inflight.set(key, p);
+  return p;
+}
 
 // ─── Upstash Redis (HTTP) ────────────────────────────────────────────────────
 async function redisCmd(env, ...args) {
@@ -151,21 +161,12 @@ function checkRateLimit(entry) {
 
 function getOrCreateIpBucket(ip) {
   const now = Date.now();
-  let b = TOKEN_CACHE.get('ip:' + ip);
+  let b = IP_BUCKETS.get(ip);
   if (!b || now > b.resetAt) {
     b = { count: 0, resetAt: now + 86400000 };
-    TOKEN_CACHE.set('ip:' + ip, b);
+    IP_BUCKETS.set(ip, b);
   }
   return b;
-}
-
-// simple inflight dedupe for streams
-const _inflight = new Map();
-async function dedupeCall(key, fn) {
-  if (_inflight.has(key)) return _inflight.get(key);
-  const p = Promise.resolve().then(fn).finally(() => _inflight.delete(key));
-  _inflight.set(key, p);
-  return p;
 }
 
 // ─── HTTP helpers ────────────────────────────────────────────────────────────
@@ -204,7 +205,7 @@ async function httpGetText(url, headers, timeout) {
   }
 }
 
-// ─── SoundCloud client_id scraping (same pattern as eclipse3) ────────────────
+// ─── SoundCloud client_id scraping ───────────────────────────────────────────
 const ID_PATTERNS = [
   /client_id\s*[=:,]\s*["']([a-zA-Z0-9]{32})["']/,
   /"client_id"\s*:\s*"([a-zA-Z0-9]{32})"/,
@@ -338,7 +339,9 @@ async function deezerFindBestTrack(title, artist, isrc, env) {
 
 async function deezerStream(deezerTrackId, env) {
   const data = await deezerApi(env, '/track/' + deezerTrackId, {});
-  const url = (data && (data.preview || data.stream_url || data.url)) || null;
+  // NOTE: Deezer's public API returns a 30s preview in data.preview.
+  // If you use a private endpoint for full streams, wire that here.
+  const url = (data && (data.stream_url || data.url || data.preview)) || null;
   if (!url) throw new Error('No Deezer stream URL');
   const isFlac = data && data.type && String(data.type).toLowerCase().includes('flac');
   return {
@@ -360,13 +363,24 @@ async function withToken(c, fn) {
   return fn(entry);
 }
 
-// ─── Config + manifest ───────────────────────────────────────────────────────
+// ─── Config + health + manifest ──────────────────────────────────────────────
 app.get('/', c => {
   const base = getBaseUrl(c);
-  return c.text(`SoundCloud + Deezer (SNIP-only) addon.
-Generate URL: POST ${base}/generate
-Manifest base: ${base}/u/{token}/manifest.json`);
+  return c.html(
+    `<html><body style="font-family:sans-serif;background:#111;color:#eee;padding:20px">
+      <h1>SoundCloud + Deezer (SNIP-only) Addon</h1>
+      <p>Use <code>POST ${base}/generate</code> to get your Eclipse addon URL.</p>
+      <p>Manifest: <code>${base}/u/&lt;token&gt;/manifest.json</code></p>
+    </body></html>`
+  );
 });
+
+app.get('/health', c => c.json({
+  status: 'ok',
+  sharedClientIdReady: !!SHARED_CLIENT_ID,
+  redisConfigured: !!(c.env.REDIS_URL && c.env.REDIS_TOKEN),
+  timestamp: new Date().toISOString()
+}));
 
 app.post('/generate', async c => {
   const ip     = (c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown').split(',')[0].trim();
